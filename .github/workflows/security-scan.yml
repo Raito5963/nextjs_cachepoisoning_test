@@ -1,0 +1,32 @@
+name: Scan and SBOM for Security Camp
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. コンテナイメージのビルド
+      - name: Test
+        run: docker build -t my-app:latest .
+
+      # 2. SBOMの生成 (Syft)
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+
+      # 3. 脆弱性スキャン (Trivy)
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'my-app:latest'
+          format: 'table'
+          # 脆弱性を見つけても続ける
+          exit-code: '0'
+          # 一旦、すべての深刻度を出力する 
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
