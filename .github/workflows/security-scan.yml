@@ -30,3 +30,12 @@ jobs:
           exit-code: '0'
           # HIGH以上の深刻度を出力する 
           severity: 'HIGH,CRITICAL'
+
+      # 4. Snykによる脆弱性スキャン (SCA + Reachability)
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/node@master
+        continue-on-error: true # 調査目的であれば一旦trueに
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --reachable
