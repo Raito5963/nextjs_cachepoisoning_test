@@ -28,5 +28,5 @@ jobs:
           format: 'table'
           # 脆弱性を見つけても続ける
           exit-code: '0'
-          # 一旦、すべての深刻度を出力する 
-          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          # HIGH以上の深刻度を出力する 
+          severity: 'HIGH,CRITICAL'
